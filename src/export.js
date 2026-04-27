@@ -61,22 +61,32 @@ async function exportMarkDownFileTree(page, folderPath, book, node) {
 
 // browserpage, bookName, url
 async function downloadMardown(page, rootPath, book, mdname, docUrl) {
-    const url = 'https://www.yuque.com/' + docUrl + '/markdown?attachment=true&latexcode=false&anchor=false&linebreak=false';
+    const url = buildMarkdownExportUrl(docUrl);
     // console.log(book + "/" + mdname + "'s download URL is: " + url)
     // console.log(rootPath)
 
-    await downloadFile(page, rootPath, book, mdname, url)
+    await downloadFile(page, rootPath, book, sanitizeFileName(mdname), url)
     // await page.waitForTimeout(1000);
 }
 
 async function downloadFile(page, rootPath, book, mdname, url, maxRetries = 3) {
     var retries = 0;
 
+    removeZeroByteMarkdownFiles(rootPath);
+    const existingFile = findExistingDownloadedFile(rootPath, mdname);
+    if (existingFile) {
+        console.log(`Skip existing document ${book}/${path.basename(existingFile, path.extname(existingFile))}`);
+        console.log();
+        return;
+    }
+
     async function downloadWithRetries() {
         try {
+            removeZeroByteMarkdownFiles(rootPath);
+            const beforeFiles = new Set(fs.readdirSync(rootPath));
             await goto(page, url);
             console.log(`Waiting download document to ${rootPath}\\${mdname}`);
-            const fileNameWithExt = await waitForDownload(rootPath, book, mdname);
+            const fileNameWithExt = await waitForDownload(rootPath, beforeFiles, book, mdname);
             const fileName = path.basename(fileNameWithExt, path.extname(fileNameWithExt));
             console.log("Download document " + book + "/" + fileName + " finished");
             console.log();
@@ -101,26 +111,130 @@ async function goto(page, link) {
     }, link);
 }
   
-async function waitForDownload(rootPath, book, mdname, started = false) {
-    const timeout = 10000; // 10s timeout
-    return new Promise((resolve, reject) => {
-        // console.log(`======> watch ${rootPath} ${mdname}.md`)
-        const watcher = fs.watch(rootPath, (eventType, filename) => {
-            // console.log(`watch ${rootPath} ${eventType} ${filename}, want ${mdname}.md`)
-            if (eventType === 'rename' && filename === `${mdname}.md.crdownload` && !started) {
-                console.log("Downloading document " + book + "/" + mdname)
-                started = true
+async function waitForDownload(rootPath, beforeFiles, book, mdname) {
+    const timeout = 30000;
+    const interval = 500;
+    let started = false;
+
+    for (let elapsed = 0; elapsed < timeout; elapsed += interval) {
+        const existingFile = findExistingDownloadedFile(rootPath, mdname);
+        if (existingFile) {
+            return existingFile;
+        }
+
+        const files = fs.readdirSync(rootPath);
+        for (const fileName of files) {
+            if (!beforeFiles.has(fileName) && fileName.endsWith('.md.crdownload') && !started) {
+                console.log("Downloading document " + book + "/" + mdname);
+                started = true;
             }
 
-            if (eventType === 'rename' && filename === `${mdname}.md` && started) {
-                watcher.close();
-                resolve(filename);
+            if (!beforeFiles.has(fileName) && fileName.endsWith('.md')) {
+                return fileName;
             }
-        });
+        }
 
-        setTimeout(() => {
-            watcher.close();
-            reject(new Error('Download timed out'));
-        }, timeout);
+        await sleep(interval);
+    }
+
+    throw new Error('Download timed out');
+}
+
+function findExistingDownloadedFile(rootPath, mdname) {
+    const expectedName = normalizeCompareName(mdname);
+    const files = fs.readdirSync(rootPath);
+    return files.find((fileName) => {
+        if (!fileName.endsWith('.md')) {
+            return false;
+        }
+
+        const filePath = path.join(rootPath, fileName);
+        if (fs.statSync(filePath).size === 0) {
+            return false;
+        }
+
+        return normalizeCompareName(fileName) === expectedName;
     });
+}
+
+export function sanitizeFileName(fileName) {
+    return fileName
+        .replace(/[\\/]/g, '_')
+        .replace(/[\r\n]+/g, '_')
+        .trim();
+}
+
+function normalizeCompareName(fileName) {
+    return sanitizeFileName(path.basename(fileName, path.extname(fileName)));
+}
+
+function sleep(ms) {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function removeZeroByteMarkdownFiles(rootPath) {
+    const files = fs.readdirSync(rootPath);
+    for (const fileName of files) {
+        if (!fileName.endsWith('.md')) {
+            continue;
+        }
+
+        const filePath = path.join(rootPath, fileName);
+        if (fs.statSync(filePath).size === 0) {
+            fs.rmSync(filePath, { force: true });
+        }
+    }
+}
+
+export function buildMarkdownExportUrl(docUrl) {
+    return 'https://www.yuque.com/' + docUrl + '/markdown?attachment=true&latexcode=false&anchor=false&linebreak=false';
+}
+
+export function collectExpectedMarkdownDocs(exportPath, books) {
+    const expectedDocs = [];
+    for (const book of books) {
+        collectExpectedMarkdownDocsByNode(exportPath, book, book.root, expectedDocs);
+    }
+    return expectedDocs;
+}
+
+function collectExpectedMarkdownDocsByNode(folderPath, book, node, expectedDocs) {
+    let currentFolderPath = folderPath;
+
+    switch (node.type) {
+        case type.Book:
+            currentFolderPath = path.join(folderPath, book.name);
+            break;
+        case type.Title:
+            currentFolderPath = path.join(folderPath, node.name);
+            break;
+        case type.TitleDoc:
+            currentFolderPath = path.join(folderPath, node.name);
+            expectedDocs.push(buildExpectedMarkdownDoc(currentFolderPath, book, node));
+            break;
+        case type.Document:
+            expectedDocs.push(buildExpectedMarkdownDoc(currentFolderPath, book, node));
+            break;
+        default:
+            break;
+    }
+
+    if (node.children) {
+        for (const childNode of node.children) {
+            collectExpectedMarkdownDocsByNode(currentFolderPath, book, childNode, expectedDocs);
+        }
+    }
+}
+
+function buildExpectedMarkdownDoc(rootPath, book, node) {
+    const fileBaseName = sanitizeFileName(node.name.replace(/\//g, '_'));
+    const filePath = path.join(rootPath, `${fileBaseName}.md`);
+
+    return {
+        bookName: book.name,
+        nodeName: node.name,
+        fileBaseName,
+        filePath,
+        exportUrl: buildMarkdownExportUrl(`${book.user_url}/${book.slug}/${node.object.url}`),
+    };
 }

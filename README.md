@@ -1,4 +1,12 @@
 
+
+**forked from renyunkang/yuque-exporter ,参考 gxr404/yuque-dl, 添加相应增强功能, 仅供学习使用 :** 
+- 登录等待
+- 图片下载
+- 校验导出
+
+
+
 # 语雀导出文档工具
 ### 功能：
 
@@ -7,8 +15,9 @@
 - 支持导出失败重试
 - 导出文档中的图片到本地
 - 替换文档中的图片链接
+- 自动校验导出的 markdown 是否完整，并生成校验报告
 
-> ps: 后面两个功能是使用 python 实现，可以单独使用
+> ps: 当前 `node main.js` 主流程已经内置图片本地化与导出校验；旧版 `export-image.py` 仍可单独使用。
 
 效果展示：
 
@@ -96,8 +105,8 @@ $env:USER="xxx";$env:PASSWORD="xxx";$env:EXPORT_PATH="/path/to/exporter"; node .
 - **MacOS**
 ```bash
 # 密码有特殊字符，建议单引号处理
-export USER='xxx'
-export PASSWORD='xxx'
+export USER='your_account'
+export PASSWORD='your_password'
 
 # 运行
 node main.js
@@ -105,13 +114,33 @@ node main.js
 
 #### 3. 导出文档中的图片
 
+`node main.js` 在当前版本会在 markdown 导出完成后，自动执行一次“图片下载 + markdown 图片链接替换 + 导出完整性校验”。
+
+图片处理逻辑说明：
+
+- 会把 markdown 中的远程图片下载到 `output/images/<年份>/`
+- 会把 markdown 中的图片链接改写为相对路径
+- 对于没有文件后缀的图片地址，会根据响应头里的 `content-type` 推断图片格式后再保存
+- 对于语雀受登录态保护的图片请求，会自动带上当前登录 cookie
+
+校验结果会输出到：
+
+- `output/_export_verification.json`
+- `output/_export_verification.md`
+
+校验报告会同时包含：
+
+- 预期文档数、实际 markdown 文件数
+- 缺失文件 / 空文件 / 远端本身为空的文档
+- 仍然残留远程图片链接的 markdown 文件
+
 需要用到的几个环境变量：
 
 | 环境变量 | 选项 | 描述 |
 |--|--|--|
 | MARKDOWN_DIR | 非必须 | 指定 mardown 文件夹路径，默认为当前工作目录的 output 目录 |
-| DOWNLOAD_IMAGE | 非必须 | 指定是否导出图片，导出路径为 MARKDOWN_DIR 目录下的 images 目录，默认为 true |
-| UPDATE_MDIMG_URL | 非必须 | 指定是否更新文件中的图片路径，未指定 REPLACE_IMAGE_HOST 时，会更新为图片路径的相对路径。默认为 false |
+| DOWNLOAD_IMAGE | 非必须 | 指定是否导出图片，导出路径为 MARKDOWN_DIR 目录下的 images 目录，主流程默认为 true |
+| UPDATE_MDIMG_URL | 非必须 | 指定是否更新文件中的图片路径，未指定 REPLACE_IMAGE_HOST 时，会更新为图片路径的相对路径，主流程默认为 true |
 | REPLACE_IMAGE_HOST | 非必须 | 更新图片路径时自定义文件 url，格式为：{REPLACE_IMAGE_HOST}/{years}/{img_name}，在使用自定义对象存储时，建议上传图片时的路径符合前面的格式；默认为空 |
 
 **使用工具导出**
@@ -160,4 +189,3 @@ const browser = await puppeteer.launch({ headless: true, executablePath: '/usr/b
 // headless: false 会打开浏览器实时观察模拟的操作，可用于调试；executablePath 替换为自己本机对应路径
 const browser = await puppeteer.launch({ headless: false, executablePath: "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe" });
 ```
-
